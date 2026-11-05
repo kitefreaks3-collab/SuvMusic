@@ -70,7 +70,7 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
-            applicationIdSuffix = ".debug"
+            applicationIdSuffix = ".ayushdev"
         }
         release {
             isMinifyEnabled = true
