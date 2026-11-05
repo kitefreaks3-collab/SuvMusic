@@ -208,21 +208,32 @@ class PlaylistManagementViewModel @Inject constructor(
         if (songs.isEmpty()) return
 
         viewModelScope.launch {
-            _uiState.update { it.copy(isAddingSong = true) }
+            _uiState.update { it.copy(isAddingSong = true, successMessage = null, errorMessage = null) }
 
-            val result = youTubeRepository.addSongsToAnyPlaylist(playlistId, songs)
+            val result = runCatching {
+                youTubeRepository.addSongsToAnyPlaylist(playlistId, songs)
+            }.getOrElse { error ->
+                _uiState.update {
+                    it.copy(
+                        isAddingSong = false,
+                        errorMessage = "Couldn't add songs: ${error.message ?: "Unexpected error"}"
+                    )
+                }
+                return@launch
+            }
             val success = result.isSuccess
             val message = result.describe(songs)
 
             _uiState.update {
                 it.copy(
                     isAddingSong = false,
-                    showAddToPlaylistSheet = false,
-                    selectedSongs = emptyList(),
+                    showAddToPlaylistSheet = !success,
+                    selectedSongs = if (success) emptyList() else songs,
                     successMessage = if (success) message else null,
                     errorMessage = if (!success) message else null
                 )
             }
+            if (success) loadUserPlaylists()
         }
     }
 
