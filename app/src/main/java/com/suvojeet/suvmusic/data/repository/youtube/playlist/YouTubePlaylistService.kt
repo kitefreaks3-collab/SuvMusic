@@ -615,9 +615,12 @@ class YouTubePlaylistService @Inject constructor(
         withContext(Dispatchers.IO) {
             if (songs.isEmpty()) return@withContext AddToPlaylistResult.Failed("No songs selected")
 
-            // Liked Songs is served from the local cache rather than a playlist edit, so it
-            // takes the local path even though its id is a YouTube one.
-            if (isLocalPlaylist(playlistId) || playlistId == LIKED_ID) {
+            // Resolve local playlists by both their stable prefix and the local database.
+            // This also handles older/imported local playlist IDs that predate the prefix.
+            val isStoredLocally = playlistId == LIKED_ID ||
+                isLocalPlaylist(playlistId) ||
+                runCatching { libraryRepository.getPlaylistById(playlistId) != null }.getOrDefault(false)
+            if (isStoredLocally) {
                 return@withContext addToLocalPlaylist(playlistId, songs)
             }
 
@@ -639,6 +642,7 @@ class YouTubePlaylistService @Inject constructor(
     private suspend fun addToLocalPlaylist(playlistId: String, songs: List<Song>): AddToPlaylistResult {
         var added = 0
         var duplicate: String? = null
+        var failure: String? = null
 
         for (song in songs) {
             try {
@@ -646,7 +650,14 @@ class YouTubePlaylistService @Inject constructor(
                     duplicate = song.title
                     continue
                 }
+
                 libraryRepository.addSongToPlaylist(playlistId, song)
+
+                // Verify the database write before reporting success or closing the sheet.
+                if (!libraryRepository.isSongInPlaylist(playlistId, song.id)) {
+                    failure = "Database did not save '${song.title}'"
+                    continue
+                }
 
                 // A playlist created empty has no art until its first song supplies some.
                 val item = libraryRepository.getPlaylistById(playlistId)
@@ -656,14 +667,15 @@ class YouTubePlaylistService @Inject constructor(
                 added++
             } catch (e: Exception) {
                 e.printStackTrace()
+                failure = e.message ?: "Database error while adding '${song.title}'"
             }
         }
 
         return when {
             added == songs.size -> AddToPlaylistResult.Added(added)
             added > 0 -> AddToPlaylistResult.PartiallyAdded(added, songs.size)
-            duplicate != null -> AddToPlaylistResult.AlreadyPresent(duplicate)
-            else -> AddToPlaylistResult.Failed("Couldn't add to playlist")
+            duplicate != null && failure == null -> AddToPlaylistResult.AlreadyPresent(duplicate)
+            else -> AddToPlaylistResult.Failed(failure ?: "Couldn't add to local playlist")
         }
     }
 
