@@ -432,39 +432,59 @@ class PlaylistViewModel @Inject constructor(
 
     fun createPlaylist(title: String, description: String, isPrivate: Boolean, syncWithYt: Boolean) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isCreatingPlaylist = true) }
-            
+            _uiState.update { it.copy(isCreatingPlaylist = true, errorMessage = null, successMessage = null) }
+
             val song = _uiState.value.selectedSong
+            var shouldCloseDialog = false
             try {
-                val playlistId = if (syncWithYt && sessionManager.canPushToYouTube()) {
+                val pushToYouTube = syncWithYt && sessionManager.canPushToYouTube()
+                val playlistId = if (pushToYouTube) {
                     val privacyStatus = if (isPrivate) "PRIVATE" else "PUBLIC"
                     youTubeRepository.createPlaylist(title, description, privacyStatus)
+                        ?: throw IllegalStateException("YouTube Music did not confirm playlist creation")
                 } else {
-                    // Create Local Playlist
                     val id = "local_" + UUID.randomUUID().toString()
                     val playlist = Playlist(
-                        id = id, 
-                        title = title, 
-                        author = "You", 
-                        thumbnailUrl = song?.thumbnailUrl, 
+                        id = id,
+                        title = title,
+                        author = "You",
+                        thumbnailUrl = song?.thumbnailUrl,
                         songs = emptyList()
                     )
                     libraryRepository.savePlaylist(playlist)
                     id
                 }
 
-                if (playlistId != null && song != null) {
-                    if (syncWithYt && sessionManager.canPushToYouTube()) {
+                if (song != null) {
+                    val songAdded = if (pushToYouTube) {
                         youTubeRepository.addSongToPlaylist(playlistId, song.id)
                     } else {
                         libraryRepository.addSongToPlaylist(playlistId, song)
+                        true
                     }
+
+                    if (!songAdded) {
+                        _uiState.update {
+                            it.copy(errorMessage = "Playlist was created, but '${song.title}' could not be added. Open the playlist and retry.")
+                        }
+                        shouldCloseDialog = true
+                    } else {
+                        _uiState.update {
+                            it.copy(successMessage = "Playlist created and '${song.title}' added")
+                        }
+                        shouldCloseDialog = true
+                    }
+                } else {
+                    _uiState.update { it.copy(successMessage = "Playlist created") }
+                    shouldCloseDialog = true
                 }
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = "Failed to create playlist: ${e.message}") }
+                _uiState.update {
+                    it.copy(errorMessage = "Failed to create playlist: ${e.message ?: "Unknown error"}")
+                }
             } finally {
                 _uiState.update { it.copy(isCreatingPlaylist = false) }
-                hideCreatePlaylistDialog()
+                if (shouldCloseDialog) hideCreatePlaylistDialog()
             }
         }
     }
